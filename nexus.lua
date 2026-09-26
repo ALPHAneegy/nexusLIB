@@ -14,7 +14,7 @@
 		Executor con readfile/loadstring: local lib = loadstring(readfile("Luna.lua"))()
 
 	EJEMPLO:
-		local win = lib:CreateWindow{ Title = "LUNA", Subtitle = "FUTURISTIC UI" }
+		local win = lib:CreateWindow{ Title = "LUNA", Subtitle = "FUTURISTIC UI", RestoreButtonText = "MENU" }
 		local tab = win:AddTab("Principal")
 		local sec = tab:AddSection("Opciones")
 
@@ -26,7 +26,7 @@
 		sec:AddProgress("Carga", { Default = 40 })
 		sec:AddKeybind("Bindeo")
 
-		win:SetKeybind(Enum.KeyCode.RightControl) -- ocultar/mostrar
+		win:SetKeybind(Enum.KeyCode.RightControl) -- reemplaza LShift predeterminado
 		lib:Notify{ Title = "Listo", Text = "UI cargada", Type = "success" }
 		lib:Theme("Matrix")           -- Cyber / Matrix / Ember / Frost / Mono, o una tabla
 		lib.Config.Debug = true       -- imprime que propiedad no se pudo asignar (si la hay)
@@ -47,6 +47,8 @@ local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local StatsService = game:GetService("Stats")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -115,7 +117,7 @@ local lib = {}
 lib.__index = lib
 lib.Version = "1.0.0"
 -- Huella: si el executor carga otra version, el numero no coincide con este.
-lib.Build = "luna-1.0.0-b17-theme-tab-label"
+lib.Build = "luna-1.0.0-b23-restore-stats"
 
 --[[ CONFIG ]]--
 
@@ -1240,6 +1242,10 @@ function lib:CreateWindow(nameOrOptions, extra)
 	local width = options.Width or 520
 	local height = options.Height or 620
 	local cascade = #Windows * 26
+	local restoreButton
+	local restoreButtonWidth, restoreButtonHeight = 220, 72
+	local restoreButtonText = tostring(options.RestoreButtonText or "LUNA")
+	local restoreFrameCount, restoreElapsed, restoreFPS = 0, 0, 0
 
 	local function centerPosition(offsetX, offsetY)
 		local size = viewport()
@@ -1259,6 +1265,75 @@ function lib:CreateWindow(nameOrOptions, extra)
 		ClipsDescendants = true,
 	}, root)
 	tag("Panel", frame)
+	local screenSize = viewport()
+	restoreButton = button(root, {
+		Name = "LunaRestoreButton",
+		Size = UDim2.fromOffset(restoreButtonWidth, restoreButtonHeight),
+		Position = UDim2.fromOffset(
+			max(8, screenSize.X / scaleValue - restoreButtonWidth - 12),
+			max(8, screenSize.Y / scaleValue - restoreButtonHeight - 12)
+		),
+		Text = "",
+		TextWrapped = false,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		TextSize = 10,
+		TextColor3 = Config.Accent,
+		BackgroundTransparency = 0.08,
+		Visible = false,
+		Active = true,
+		ZIndex = 100,
+	})
+	round(restoreButton, 5)
+	outline(restoreButton, Config.Accent, 1, 0.2)
+	window.RestoreButton = restoreButton
+
+	local function getRestorePing()
+		local ok, value = pcall(function()
+			return StatsService.Network.ServerStatsItem["Data Ping"]:GetValue()
+		end)
+		if ok and type(value) == "number" then
+			return tostring(roundValue(value)) .. " ms"
+		end
+		ok, value = pcall(function()
+			return StatsService.Network.ServerStatsItem["Data Ping"]:GetValueString()
+		end)
+		if ok and value ~= nil then
+			return tostring(value)
+		end
+		if LocalPlayer then
+			ok, value = pcall(function()
+				return LocalPlayer:GetNetworkPing()
+			end)
+			if ok and type(value) == "number" then
+				return tostring(roundValue(value * 1000)) .. " ms"
+			end
+		end
+		return "--"
+	end
+
+	local function refreshRestoreButtonText()
+		local playerCount = 0
+		local ok, roster = pcall(function()
+			return Players:GetPlayers()
+		end)
+		if ok and type(roster) == "table" then
+			playerCount = #roster
+		end
+		local playerText = tostring(playerCount)
+		local maxOk, maxPlayers = pcall(function()
+			return Players.MaxPlayers
+		end)
+		if maxOk and type(maxPlayers) == "number" and maxPlayers > 0 then
+			playerText = playerText .. "/" .. tostring(maxPlayers)
+		end
+		restoreButton.Text = restoreButtonText
+			.. "\nFPS: " .. tostring(restoreFPS)
+			.. " | Ping: " .. getRestorePing()
+			.. "\nJugadores: " .. playerText
+	end
+
+	refreshRestoreButtonText()
 	round(frame, Config.Radius + 2)
 	new("UIStroke", {
 		Color = Color3.new(0, 0, 0),
@@ -1629,16 +1704,23 @@ function lib:CreateWindow(nameOrOptions, extra)
 		if not isVisible then
 			self:CloseOverlays()
 		end
-		frame.Visible = isVisible and true or false
+		local visible = isVisible and true or false
+		frame.Visible = visible
+		restoreButton.Visible = not visible
 	end
 
 	function window:Toggle()
-		frame.Visible = not frame.Visible
+		self:SetVisible(not frame.Visible)
 		return frame.Visible
 	end
 
 	function window:IsVisible()
 		return frame.Visible
+	end
+
+	function window:SetRestoreButtonText(text)
+		restoreButtonText = tostring(text or "")
+		refreshRestoreButtonText()
 	end
 
 	function window:Center()
@@ -1658,7 +1740,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 			if processed or input.KeyCode ~= key or UserInputService:GetFocusedTextBox() then
 				return
 			end
-			frame.Visible = not frame.Visible
+			self:SetVisible(not frame.Visible)
 		end)
 		self:AddConnection(function()
 			if self.keyConnection then
@@ -1666,6 +1748,70 @@ function lib:CreateWindow(nameOrOptions, extra)
 			end
 		end)
 	end
+
+	local restoreDragCancel
+	local restoreWasDragged = false
+	window:AddConnection(restoreButton.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		restoreWasDragged = false
+		if restoreDragCancel then
+			restoreDragCancel()
+			restoreDragCancel = nil
+		end
+		local startPointer = pointerPosition(input)
+		local startPosition = restoreButton.Position
+		restoreDragCancel = beginDrag(function(move)
+			local delta = (pointerPosition(move) - startPointer) / scaleValue
+			if abs(delta.X) > 4 or abs(delta.Y) > 4 then
+				restoreWasDragged = true
+			end
+			local size = viewport()
+			local maxX = max(0, size.X / scaleValue - restoreButtonWidth)
+			local maxY = max(0, size.Y / scaleValue - restoreButtonHeight)
+			restoreButton.Position = UDim2.fromOffset(
+				clamp(startPosition.X.Offset + delta.X, 0, maxX),
+				clamp(startPosition.Y.Offset + delta.Y, 0, maxY)
+			)
+		end, function()
+			restoreDragCancel = nil
+		end)
+	end))
+	window:AddConnection(restoreButton.Activated:Connect(function()
+		if restoreWasDragged then
+			restoreWasDragged = false
+			return
+		end
+		window:SetVisible(true)
+	end))
+	window:AddConnection(function()
+		if restoreDragCancel then
+			restoreDragCancel()
+			restoreDragCancel = nil
+		end
+		restoreButton:Destroy()
+	end)
+	local frameSignal = RunService.RenderStepped or RunService.Heartbeat
+	if frameSignal then
+		window:AddConnection(frameSignal:Connect(function(deltaTime)
+			if type(deltaTime) ~= "number" or deltaTime <= 0 then
+				return
+			end
+			restoreFrameCount = restoreFrameCount + 1
+			restoreElapsed = restoreElapsed + deltaTime
+			if restoreElapsed >= 1 then
+				restoreFPS = roundValue(restoreFrameCount / restoreElapsed)
+				restoreFrameCount = 0
+				restoreElapsed = 0
+				refreshRestoreButtonText()
+			end
+		end))
+	end
+
+	-- RightShift oculta/muestra la ventana por defecto; se puede sustituir con SetKeybind.
+	window:SetKeybind(options.Keybind == nil and Enum.KeyCode.RightShift or options.Keybind)
 
 	function window:Minimize(isMinimized)
 		self.minimized = isMinimized == nil and (not self.minimized) or (isMinimized and true or false)
@@ -1693,7 +1839,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 		window:Destroy()
 	end)
 	minimizeButton.Activated:Connect(function()
-		window:Minimize()
+		window:SetVisible(false)
 	end)
 
 	function window:Destroy()
@@ -1887,6 +2033,18 @@ function lib:Theme(theme)
 	end
 	for index = 1, #Windows do
 		local window = Windows[index]
+		for tabIndex = 1, #window.tabs do
+			local entry = window.tabs[tabIndex]
+			local active = window.activeTab == entry.tab
+			-- Reemplaza cualquier tween de seleccion anterior que aun use el color viejo.
+			tween(entry.button, {
+				TextColor3 = active and Config.Accent or Config.Muted,
+			}, Config.Anim)
+		end
+		if window.RestoreButton then
+			window.RestoreButton.BackgroundColor3 = Config.Card
+			window.RestoreButton.TextColor3 = Config.Accent
+		end
 		for position = 1, #window.scrollbars do
 			window.scrollbars[position].ScrollBarImageColor3 = Config.Accent
 		end
