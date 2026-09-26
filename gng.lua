@@ -26,7 +26,7 @@
 		sec:AddProgress("Carga", { Default = 40 })
 		sec:AddKeybind("Bindeo")
 
-		win:SetKeybind(Enum.KeyCode.RightControl) -- ocultar/mostrar
+		win:SetKeybind(Enum.KeyCode.RightControl) -- reemplaza LShift predeterminado
 		lib:Notify{ Title = "Listo", Text = "UI cargada", Type = "success" }
 		lib:Theme("Matrix")           -- Cyber / Matrix / Ember / Frost / Mono, o una tabla
 		lib.Config.Debug = true       -- imprime que propiedad no se pudo asignar (si la hay)
@@ -115,7 +115,7 @@ local lib = {}
 lib.__index = lib
 lib.Version = "1.0.0"
 -- Huella: si el executor carga otra version, el numero no coincide con este.
-lib.Build = "luna-1.0.0-b14-centered-chip"
+lib.Build = "luna-1.0.0-b20-left-shift"
 
 --[[ CONFIG ]]--
 
@@ -344,12 +344,16 @@ local function accentFill(object, rotation)
 end
 
 local function card(parent, size, position, class)
-	local object = new(class or "Frame", {
+	local properties = {
 		Size = size or UDim2.fromScale(1, 1),
 		Position = position,
 		BackgroundColor3 = Config.Card,
 		BorderSizePixel = 0,
-	}, parent)
+	}
+	if class == "TextButton" then
+		properties.Text = ""
+	end
+	local object = new(class or "Frame", properties, parent)
 	round(object)
 	return tag("Card", object)
 end
@@ -1293,8 +1297,8 @@ function lib:CreateWindow(nameOrOptions, extra)
 
 	local chip = new("Frame", {
 		Size = UDim2.fromOffset(0, 20),
-		Position = UDim2.new(0.5, 0, 0, 8),
-		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(1, -104, 0, 8),
+		AnchorPoint = Vector2.new(1, 0),
 		AutomaticSize = Enum.AutomaticSize.X,
 		BackgroundColor3 = Config.Card,
 		BackgroundTransparency = 0.15,
@@ -1302,15 +1306,19 @@ function lib:CreateWindow(nameOrOptions, extra)
 	}, bar)
 	round(chip, 3)
 	local chipLabel = label(chip, {
-		Size = UDim2.fromOffset(0, 0),
-		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.fromOffset(0, 20),
 		AutomaticSize = Enum.AutomaticSize.X,
 		Text = "",
 		TextColor3 = Config.Accent,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextYAlignment = Enum.TextYAlignment.Center,
 		Font = Config.MonoFont,
 		TextSize = 11,
 	}, "Accent")
-	new("UIPadding", { PaddingRight = UDim.new(0, 8) }, chip)
+	new("UIPadding", {
+		PaddingLeft = UDim.new(0, 8),
+		PaddingRight = UDim.new(0, 8),
+	}, chip)
 
 	label(bar, {
 		Size = UDim2.new(0.45, -20, 0, 14),
@@ -1659,6 +1667,9 @@ function lib:CreateWindow(nameOrOptions, extra)
 		end)
 	end
 
+	-- LShift oculta/muestra la ventana por defecto; se puede sustituir con SetKeybind.
+	window:SetKeybind(options.Keybind == nil and Enum.KeyCode.LeftShift or options.Keybind)
+
 	function window:Minimize(isMinimized)
 		self.minimized = isMinimized == nil and (not self.minimized) or (isMinimized and true or false)
 		local target = self.minimized and Config.BarHeight or self.fullHeight
@@ -1869,7 +1880,7 @@ function lib:Theme(theme)
 					object.Color = ColorSequence.new(color, Config.Accent2)
 				elseif object:IsA("UIStroke") then
 					object.Color = color
-				elseif role == "Text" or role == "Muted" then
+				elseif object:IsA("TextLabel") or role == "Text" or role == "Muted" then
 					object.TextColor3 = color
 				else
 					object.BackgroundColor3 = color
@@ -1879,6 +1890,14 @@ function lib:Theme(theme)
 	end
 	for index = 1, #Windows do
 		local window = Windows[index]
+		for tabIndex = 1, #window.tabs do
+			local entry = window.tabs[tabIndex]
+			local active = window.activeTab == entry.tab
+			-- Reemplaza cualquier tween de seleccion anterior que aun use el color viejo.
+			tween(entry.button, {
+				TextColor3 = active and Config.Accent or Config.Muted,
+			}, Config.Anim)
+		end
 		for position = 1, #window.scrollbars do
 			window.scrollbars[position].ScrollBarImageColor3 = Config.Accent
 		end
