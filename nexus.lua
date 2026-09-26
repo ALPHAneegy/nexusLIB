@@ -1,16 +1,20 @@
 --[[
-	NEXUS UI  •  v1.0.0
+	LUNA UI  •  v1.0.0
 	Libreria de interfaz futurista para Roblox. Un solo archivo, sin assets externos,
 	0 loops por frame (solo eventos + tweens).
 
 	ES COMPATIBLE CON LOCALScript Y CON EXECUTORS (Lua 5.1 / LuaJIT):
 	no usa +=, continue, //, goto, math.clamp, math.round, table.clear, table.clone
 	ni task.delay (si no existe task usa spawn/wait), y si no hay PlayerGui cae a CoreGui.
-	En executors la libreria queda en getgenv().NexusUI.
+	En executors la libreria queda en getgenv().LunaUI.
 
-	CARGA (LocalScript o executor):
-		local lib = loadstring(game:HttpGet("https://raw.githubusercontent.com/ALPHAneegy/nexusLIB/refs/heads/main/nexus.lua"))()
-		local win = lib:CreateWindow{ Title = "NEXUS", Subtitle = "v1.0.0" }
+	CARGA:
+		LocalScript: local lib = require(script.Parent.Luna)
+		Executor con loadfile: local lib = loadfile("Luna.lua")()
+		Executor con readfile/loadstring: local lib = loadstring(readfile("Luna.lua"))()
+
+	EJEMPLO:
+		local win = lib:CreateWindow{ Title = "LUNA", Subtitle = "FUTURISTIC UI" }
 		local tab = win:AddTab("Principal")
 		local sec = tab:AddSection("Opciones")
 
@@ -22,7 +26,7 @@
 		sec:AddProgress("Carga", { Default = 40 })
 		sec:AddKeybind("Bindeo")
 
-		win:SetKeybind(Enum.KeyCode.RightControl)
+		win:SetKeybind(Enum.KeyCode.RightControl) -- ocultar/mostrar
 		lib:Notify{ Title = "Listo", Text = "UI cargada", Type = "success" }
 		lib:Theme("Matrix")           -- Cyber / Matrix / Ember / Frost / Mono, o una tabla
 		lib.Config.Debug = true       -- imprime que propiedad no se pudo asignar (si la hay)
@@ -111,7 +115,7 @@ local lib = {}
 lib.__index = lib
 lib.Version = "1.0.0"
 -- Huella: si el executor carga otra version, el numero no coincide con este.
-lib.Build = "nexus-1.0.0-b10-header-subtitle"
+lib.Build = "luna-1.0.0-b17-theme-tab-label"
 
 --[[ CONFIG ]]--
 
@@ -186,12 +190,12 @@ end
 
 local function warnProperty(class, key, message)
 	if Config.Debug then
-		print("[NexusUI] " .. class .. "." .. tostring(key) .. ": " .. tostring(message))
+		print("[LunaUI] " .. class .. "." .. tostring(key) .. ": " .. tostring(message))
 	end
 end
 
 local function warnElement(kind, message)
-	print("[NexusUI] Add" .. kind .. " no se pudo crear: " .. tostring(message))
+	print("[LunaUI] Add" .. kind .. " no se pudo crear: " .. tostring(message))
 end
 
 local function new(class, properties, parent)
@@ -340,12 +344,16 @@ local function accentFill(object, rotation)
 end
 
 local function card(parent, size, position, class)
-	local object = new(class or "Frame", {
+	local properties = {
 		Size = size or UDim2.fromScale(1, 1),
 		Position = position,
 		BackgroundColor3 = Config.Card,
 		BorderSizePixel = 0,
-	}, parent)
+	}
+	if class == "TextButton" then
+		properties.Text = ""
+	end
+	local object = new(class or "Frame", properties, parent)
 	round(object)
 	return tag("Card", object)
 end
@@ -397,13 +405,13 @@ if not playerGui then
 	playerGui = game:GetService("CoreGui")
 end
 
-local previous = playerGui:FindFirstChild("NexusUI")
+local previous = playerGui:FindFirstChild("LunaUI")
 if previous then
 	previous:Destroy()
 end
 
 local screen = new("ScreenGui", {
-	Name = "NexusUI",
+	Name = "LunaUI",
 	ResetOnSpawn = false,
 	IgnoreGuiInset = true,
 	DisplayOrder = 500,
@@ -572,6 +580,10 @@ local function elementApi(frame, page)
 			unregister()
 			unregister = nil
 		end
+		if self.dragCancel then
+			self.dragCancel()
+			self.dragCancel = nil
+		end
 		for index = 1, #self._conns do
 			local item = self._conns[index]
 			if type(item) == "function" then
@@ -714,11 +726,10 @@ function Elements.Slider(page, nameOrOptions, extra)
 		ZIndex = 3,
 	}, track)
 	round(knob, 6)
-	new("UIShadow", {
+	new("UIStroke", {
 		Color = Color3.new(0, 0, 0),
-		Transparency = 0.5,
-		Offset = Vector2.new(0, 1),
-		Spread = 0,
+		Transparency = 0.55,
+		Thickness = 1,
 	}, knob)
 
 	local hit = new("Frame", {
@@ -1278,7 +1289,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 	local titleLabel = label(bar, {
 		Size = UDim2.new(0.45, -20, 0, 18),
 		Position = UDim2.fromOffset(28, 0),
-		Text = tostring(options.Title or "NEXUS"),
+		Text = tostring(options.Title or "LUNA"),
 		Font = Config.MonoFont,
 		TextSize = 14,
 		TextTruncate = Enum.TextTruncate.AtEnd,
@@ -1294,22 +1305,20 @@ function lib:CreateWindow(nameOrOptions, extra)
 		BorderSizePixel = 0,
 	}, bar)
 	round(chip, 3)
-	tag("Accent", new("Frame", {
-		Size = UDim2.fromOffset(2, 12),
-		Position = UDim2.new(0, 5, 0.5, 0),
-		AnchorPoint = Vector2.new(0, 0.5),
-		BackgroundColor3 = Config.Accent,
-		BorderSizePixel = 0,
-	}, chip))
 	local chipLabel = label(chip, {
-		Size = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromOffset(0, 20),
 		AutomaticSize = Enum.AutomaticSize.X,
 		Text = "",
 		TextColor3 = Config.Accent,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		TextYAlignment = Enum.TextYAlignment.Center,
 		Font = Config.MonoFont,
 		TextSize = 11,
 	}, "Accent")
-	new("UIPadding", { PaddingLeft = UDim.new(0, 11), PaddingRight = UDim.new(0, 8) }, chip)
+	new("UIPadding", {
+		PaddingLeft = UDim.new(0, 8),
+		PaddingRight = UDim.new(0, 8),
+	}, chip)
 
 	label(bar, {
 		Size = UDim2.new(0.45, -20, 0, 14),
@@ -1496,16 +1505,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 		round(tabButton, 4)
 		hoverGhost(tabButton)
 		new("UIPadding", { PaddingLeft = UDim.new(0, 24), PaddingRight = UDim.new(0, 6) }, tabButton)
-		local indicator = tag("Accent", new("Frame", {
-			Size = UDim2.fromOffset(2, 12),
-			Position = UDim2.fromOffset(7, 9),
-			BackgroundColor3 = Config.Accent,
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-			ZIndex = tabButton.ZIndex + 1,
-		}, tabButton))
-		round(indicator, 1)
-		return { Frame = tabButton, Indicator = indicator, Name = tostring(name) }
+		return { Frame = tabButton, Indicator = nil, Name = tostring(name) }
 	end
 
 	function window:SelectTab(tab)
@@ -1518,7 +1518,9 @@ function lib:CreateWindow(nameOrOptions, extra)
 				TextColor3 = active and Config.Accent or Config.Muted,
 				BackgroundTransparency = active and 0.2 or 1,
 			}, Config.Anim)
-			tween(entry.indicator, { BackgroundTransparency = active and 0 or 1 }, Config.Anim)
+			if entry.indicator then
+				tween(entry.indicator, { BackgroundTransparency = active and 0 or 1 }, Config.Anim)
+			end
 		end
 		self.activeTab = tab
 		chipLabel.Text = tab and tab.Name or ""
@@ -1555,6 +1557,9 @@ function lib:CreateWindow(nameOrOptions, extra)
 
 		local tab = { _page = page, Name = tostring(name), Window = self }
 		tab.Button = self:AddTabButton(name)
+		self:AddConnection(tab.Button.Frame.Activated:Connect(function()
+			self:SelectTab(tab)
+		end))
 
 		function tab:Select()
 			self.Window:SelectTab(self)
@@ -1795,7 +1800,7 @@ function lib:Notify(nameOrOptions, extra)
 	label(toast, {
 		Size = UDim2.new(1, -46, 0, 18),
 		Position = UDim2.fromOffset(44, 9),
-		Text = tostring(options.Title or "Nexus"),
+		Text = tostring(options.Title or "Luna"),
 		TextSize = 13,
 		ZIndex = 46,
 	})
@@ -1872,7 +1877,7 @@ function lib:Theme(theme)
 					object.Color = ColorSequence.new(color, Config.Accent2)
 				elseif object:IsA("UIStroke") then
 					object.Color = color
-				elseif role == "Text" or role == "Muted" then
+				elseif object:IsA("TextLabel") or role == "Text" or role == "Muted" then
 					object.TextColor3 = color
 				else
 					object.BackgroundColor3 = color
@@ -1922,14 +1927,14 @@ function lib:GetAccent()
 	return Config.Accent
 end
 
--- En executors deja la libreria accesible con getgenv().NexusUI
+-- En executors deja la libreria accesible con getgenv().LunaUI.
 if type(getgenv) == "function" then
 	local ok, env = pcall(getgenv)
 	if ok and type(env) == "table" then
-		env.NexusUI = lib
+		env.LunaUI = lib
 	end
 end
 
-print("[NexusUI] " .. lib.Build .. " cargado")
+print("[LunaUI] " .. lib.Build .. " cargado")
 
 return lib
