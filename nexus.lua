@@ -388,11 +388,40 @@ local function rowHeader(frame, name, value)
 	return left, right
 end
 
+local function normalizeOptions(nameOrOptions, extra)
+	if type(nameOrOptions) == "string" then
+		if type(extra) == "table" then
+			local options = table.clone(extra)
+			options.Name = nameOrOptions
+			return options
+		end
+		if type(extra) == "function" then
+			return { Name = nameOrOptions, Callback = extra }
+		end
+		return { Name = nameOrOptions }
+	end
+	if type(nameOrOptions) == "table" then
+		if type(extra) == "function" then
+			local options = table.clone(nameOrOptions)
+			options.Callback = options.Callback or extra
+			return options
+		end
+		return nameOrOptions
+	end
+	if type(extra) == "table" then
+		return extra
+	end
+	if type(extra) == "function" then
+		return { Callback = extra }
+	end
+	return {}
+end
+
 local function installElementMethods(target, page)
 	for index = 1, #ElementKinds do
 		local kind = ElementKinds[index]
-		target["Add" .. kind] = function(_, options)
-			return Elements[kind](page, options)
+		target["Add" .. kind] = function(_, a, b)
+			return Elements[kind](page, normalizeOptions(a, b))
 		end
 	end
 	return target
@@ -400,12 +429,24 @@ end
 
 local function elementApi(frame, page)
 	local api = { Frame = frame, _conns = {} }
+	local window = page and page.window
 
 	function api:AddConnection(item)
 		table.insert(self._conns, item)
 	end
 
+	local unregister = nil
+	if window then
+		unregister = window:AddConnection(function()
+			api:Destroy()
+		end)
+	end
+
 	function api:Destroy()
+		if unregister then
+			unregister()
+			unregister = nil
+		end
 		for index = 1, #self._conns do
 			local item = self._conns[index]
 			if type(item) == "function" then
@@ -425,8 +466,8 @@ end
 
 --[[ ELEMENTOS ]]--
 
-function Elements.Button(page, options)
-	options = options or {}
+function Elements.Button(page, nameOrOptions, extra)
+	local options = normalizeOptions(nameOrOptions, extra)
 	local frame = makeRow(page, 34)
 	local control = button(frame, {
 		Size = UDim2.fromScale(1, 1),
@@ -451,8 +492,8 @@ function Elements.Button(page, options)
 	return api
 end
 
-function Elements.Toggle(page, options)
-	options = options or {}
+function Elements.Toggle(page, nameOrOptions, extra)
+	local options = normalizeOptions(nameOrOptions, extra)
 	local frame = makeRow(page, 32)
 	label(frame, {
 		Size = UDim2.new(1, -56, 1, 0),
@@ -512,8 +553,8 @@ function Elements.Toggle(page, options)
 	return api
 end
 
-function Elements.Slider(page, options)
-	options = options or {}
+function Elements.Slider(page, nameOrOptions, extra)
+	local options = normalizeOptions(nameOrOptions, extra)
 	local minimum = options.Min or 0
 	local maximum = options.Max or 100
 	local step = options.Step or 1
@@ -632,8 +673,8 @@ function Elements.Slider(page, options)
 	return api
 end
 
-function Elements.Input(page, options)
-	options = options or {}
+function Elements.Input(page, nameOrOptions, extra)
+	local options = normalizeOptions(nameOrOptions, extra)
 	local frame = makeRow(page, 50)
 	label(frame, {
 		Size = UDim2.new(1, 0, 0, 15),
@@ -698,19 +739,37 @@ function Elements.Input(page, options)
 	return api
 end
 
-function Elements.Dropdown(page, options)
-	options = options or {}
+function Elements.Dropdown(page, nameOrOptions, extra)
+	local options = normalizeOptions(nameOrOptions, extra)
 	local list = options.Options or { "Opcion A", "Opcion B", "Opcion C" }
 	local selected = options.Default or list[1]
 
 	local frame = makeRow(page, 32)
 	local control = button(frame, {
 		Size = UDim2.fromScale(1, 1),
-		Text = tostring(selected),
+		Text = "",
 	})
-	new("UIPadding", { PaddingLeft = UDim.new(0, 12) }, control)
 	outline(control)
 	hoverFill(control)
+
+	label(control, {
+		Size = UDim2.new(1, -76, 1, 0),
+		Position = UDim2.fromOffset(12, 0),
+		Text = tostring(options.Name or "Dropdown"),
+		TextColor3 = Config.Muted,
+		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	}, "Muted")
+
+	local valueLabel = label(control, {
+		Size = UDim2.new(0, 60, 1, 0),
+		Position = UDim2.new(1, -76, 0, 0),
+		Text = tostring(selected),
+		TextColor3 = Config.Accent,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Font = Config.MonoFont,
+		TextSize = 12,
+	}, "Accent")
 
 	local arrow = tag("Accent", new("Frame", {
 		Size = UDim2.fromOffset(6, 6),
@@ -817,7 +876,7 @@ function Elements.Dropdown(page, options)
 			hoverGhost(option)
 			option.Activated:Connect(function()
 				selected = value
-				control.Text = tostring(selected)
+				valueLabel.Text = tostring(selected)
 				for position, entry in ipairs(optionButtons) do
 					entry.TextColor3 = tostring(list[position]) == tostring(selected)
 						and Config.Accent
@@ -842,14 +901,24 @@ function Elements.Dropdown(page, options)
 
 	refreshOptions()
 
+	local overlay = { Close = close }
+	if page.window then
+		page.window:AddRelayout(place)
+		page.window:AddOverlay(overlay)
+	end
+
 	api:AddConnection(function()
 		close()
 		menu:Destroy()
+		if page.window then
+			page.window:RemoveRelayout(place)
+			page.window:RemoveOverlay(overlay)
+		end
 	end)
 
 	function api:SetValue(value)
 		selected = value
-		control.Text = tostring(value)
+		valueLabel.Text = tostring(value)
 		for index, entry in ipairs(optionButtons) do
 			entry.TextColor3 = tostring(list[index]) == tostring(value) and Config.Accent or Config.Text
 		end
@@ -865,6 +934,11 @@ function Elements.Dropdown(page, options)
 		menuHeight = visible * 26 + 8
 		menu.Size = UDim2.fromOffset(menu.Size.X.Offset, menuHeight)
 		refreshOptions()
+		if #list == 0 then
+			close()
+		elseif open then
+			place()
+		end
 	end
 
 	function api:GetOptions()
@@ -874,8 +948,8 @@ function Elements.Dropdown(page, options)
 	return api
 end
 
-function Elements.Label(page, options)
-	options = options or {}
+function Elements.Label(page, nameOrOptions, extra)
+	local options = normalizeOptions(nameOrOptions, extra)
 	local frame = makeRow(page, 18, Enum.AutomaticSize.Y)
 	local text = label(frame, {
 		Size = UDim2.new(1, 0, 0, 18),
@@ -897,8 +971,8 @@ function Elements.Label(page, options)
 	return api
 end
 
-function Elements.Progress(page, options)
-	options = options or {}
+function Elements.Progress(page, nameOrOptions, extra)
+	local options = normalizeOptions(nameOrOptions, extra)
 	local value = math.clamp(options.Default or 0, 0, 100)
 
 	local frame = makeRow(page, 40)
@@ -935,19 +1009,34 @@ function Elements.Progress(page, options)
 	return api
 end
 
-function Elements.Keybind(page, options)
-	options = options or {}
+function Elements.Keybind(page, nameOrOptions, extra)
+	local options = normalizeOptions(nameOrOptions, extra)
 	local frame = makeRow(page, 32)
 	local control = button(frame, {
 		Size = UDim2.fromScale(1, 1),
-		Text = "Click para bindear",
-		TextColor3 = Config.Accent,
-		Font = Config.MonoFont,
-		TextSize = 12,
+		Text = "",
 	})
-	new("UIPadding", { PaddingLeft = UDim.new(0, 12) }, control)
 	outline(control)
 	hoverFill(control)
+
+	label(control, {
+		Size = UDim2.new(1, -108, 1, 0),
+		Position = UDim2.fromOffset(12, 0),
+		Text = tostring(options.Name or "Bindeo"),
+		TextColor3 = Config.Muted,
+		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	}, "Muted")
+
+	local valueLabel = label(control, {
+		Size = UDim2.new(0, 92, 1, 0),
+		Position = UDim2.new(1, -104, 0, 0),
+		Text = "",
+		TextColor3 = Config.Accent,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Font = Config.MonoFont,
+		TextSize = 12,
+	}, "Accent")
 
 	local key = options.Key or Enum.KeyCode.Unknown
 	local armed = false
@@ -955,11 +1044,11 @@ function Elements.Keybind(page, options)
 
 	local function render()
 		if armed then
-			control.Text = "[ pulsa una tecla ]"
+			valueLabel.Text = "[ pulsa una tecla ]"
 		elseif key == Enum.KeyCode.Unknown then
-			control.Text = "Click para bindear"
+			valueLabel.Text = "Click para bindear"
 		else
-			control.Text = key.Name
+			valueLabel.Text = key.Name
 		end
 	end
 
@@ -1008,19 +1097,26 @@ end
 
 local Windows = {}
 
-function lib:CreateWindow(options)
-	options = options or {}
-	local window = { _conns = {}, tabs = {}, scrollbars = {}, activeTab = nil, minimized = false }
+function lib:CreateWindow(nameOrOptions, extra)
+	local options = normalizeOptions(nameOrOptions, extra)
+	local window = { _conns = {}, tabs = {}, scrollbars = {}, _relayout = {}, _overlays = {}, activeTab = nil, minimized = false }
 
 	local width = options.Width or 520
 	local height = options.Height or 620
 	local cascade = #Windows * 26
 
+	local function centerPosition(offsetX, offsetY)
+		local size = viewport()
+		local x = ((size.X / scaleValue) - width) / 2 + (offsetX or 0)
+		local y = ((size.Y / scaleValue) - height) / 2 + (offsetY or 0)
+		return UDim2.fromOffset(math.round(x), math.round(y))
+	end
+
 	local frame = new("Frame", {
 		Name = "Window",
 		Size = UDim2.fromOffset(width, height),
-		Position = UDim2.new(0.5, cascade, 0.5, cascade),
-		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = centerPosition(cascade, cascade),
+		AnchorPoint = Vector2.new(0, 0),
 		BackgroundColor3 = Config.Panel,
 		BorderSizePixel = 0,
 		Active = true,
@@ -1190,18 +1286,66 @@ function lib:CreateWindow(options)
 		end
 		local startPointer = pointerPosition(input)
 		local startPosition = frame.Position
-		if self.dragCancel then
-			self.dragCancel()
+		if window.dragCancel then
+			window.dragCancel()
 		end
-		self.dragCancel = beginDrag(function(move)
-			local delta = pointerPosition(move) - startPointer
+		window.dragCancel = beginDrag(function(move)
+			local delta = (pointerPosition(move) - startPointer) / scaleValue
 			frame.Position = clampPosition(startPosition + delta)
+			window:Relayout()
 		end)
 	end)
 
 	function window:AddConnection(item)
 		table.insert(self._conns, item)
-		return item
+		return function()
+			for index = #self._conns, 1, -1 do
+				if self._conns[index] == item then
+					table.remove(self._conns, index)
+				end
+			end
+		end
+	end
+
+	function window:AddRelayout(callback)
+		table.insert(self._relayout, callback)
+		return callback
+	end
+
+	function window:RemoveRelayout(callback)
+		for index = #self._relayout, 1, -1 do
+			if self._relayout[index] == callback then
+				table.remove(self._relayout, index)
+			end
+		end
+	end
+
+	function window:Relayout()
+		for index = 1, #self._relayout do
+			self._relayout[index]()
+		end
+	end
+
+	function window:AddOverlay(entry)
+		table.insert(self._overlays, entry)
+		return entry
+	end
+
+	function window:RemoveOverlay(entry)
+		for index = #self._overlays, 1, -1 do
+			if self._overlays[index] == entry then
+				table.remove(self._overlays, index)
+			end
+		end
+	end
+
+	function window:CloseOverlays()
+		for index = 1, #self._overlays do
+			local entry = self._overlays[index]
+			if entry and entry.Close then
+				entry.Close()
+			end
+		end
 	end
 
 	function window:AddTabButton(name)
@@ -1231,6 +1375,7 @@ function lib:CreateWindow(options)
 	end
 
 	function window:SelectTab(tab)
+		self:CloseOverlays()
 		for index = 1, #self.tabs do
 			local entry = self.tabs[index]
 			local active = entry == tab
@@ -1264,6 +1409,7 @@ function lib:CreateWindow(options)
 
 		page.order = 0
 		page.scroller = scroller
+		page.window = self
 		page.container = new("Frame", {
 			Size = UDim2.new(1, -Config.Gutter, 0, 0),
 			Position = UDim2.fromOffset(Config.Gutter, 10),
@@ -1334,6 +1480,9 @@ function lib:CreateWindow(options)
 	end
 
 	function window:SetVisible(isVisible)
+		if not isVisible then
+			self:CloseOverlays()
+		end
 		frame.Visible = isVisible and true or false
 	end
 
@@ -1347,7 +1496,8 @@ function lib:CreateWindow(options)
 	end
 
 	function window:Center()
-		frame.Position = UDim2.fromScale(0.5, 0.5)
+		frame.Position = centerPosition(0, 0)
+		self:Relayout()
 	end
 
 	function window:SetKeybind(key)
@@ -1375,6 +1525,9 @@ function lib:CreateWindow(options)
 		self.minimized = isMinimized == nil and (not self.minimized) or (isMinimized and true or false)
 		local target = self.minimized and Config.BarHeight or self.fullHeight
 		minimizeButton.Text = self.minimized and "+" or "-"
+		if self.minimized then
+			self:CloseOverlays()
+		end
 		tween(frame, { Size = UDim2.new(0, self.fullWidth, 0, target) }, Config.Anim)
 	end
 
@@ -1391,10 +1544,10 @@ function lib:CreateWindow(options)
 		tween(minimizeButton, { BackgroundColor3 = Config.Card }, Config.Anim)
 	end)
 	closeButton.Activated:Connect(function()
-		self:Destroy()
+		window:Destroy()
 	end)
 	minimizeButton.Activated:Connect(function()
-		self:Minimize()
+		window:Minimize()
 	end)
 
 	function window:Destroy()
@@ -1402,15 +1555,22 @@ function lib:CreateWindow(options)
 			self.dragCancel()
 			self.dragCancel = nil
 		end
+		self:CloseOverlays()
+		local conns = {}
 		for index = 1, #self._conns do
-			local item = self._conns[index]
+			conns[index] = self._conns[index]
+		end
+		table.clear(self._conns)
+		for index = 1, #conns do
+			local item = conns[index]
 			if type(item) == "function" then
 				item()
 			else
 				item:Disconnect()
 			end
 		end
-		table.clear(self._conns)
+		table.clear(self._relayout)
+		table.clear(self._overlays)
 		for index = #Windows, 1, -1 do
 			if Windows[index] == self then
 				table.remove(Windows, index)
@@ -1458,8 +1618,13 @@ local function restackToasts()
 	end
 end
 
-function lib:Notify(options)
-	options = options or {}
+function lib:Notify(nameOrOptions, extra)
+	local options
+	if type(nameOrOptions) == "string" then
+		options = { Title = nameOrOptions, Text = extra }
+	else
+		options = nameOrOptions or extra or {}
+	end
 	local kind = toastTypes[options.Type or "info"] or toastTypes.info
 
 	local toast = card(toastLayer, UDim2.fromOffset(300, toastHeight), UDim2.new(1, 40, 1, -20), "Frame")
