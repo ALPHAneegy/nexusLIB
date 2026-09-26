@@ -110,6 +110,8 @@ end
 local lib = {}
 lib.__index = lib
 lib.Version = "1.0.0"
+-- Huella: si el executor carga otra version, el numero no coincide con este.
+lib.Build = "nexus-1.0.0-b12-no-tab-bars"
 
 --[[ CONFIG ]]--
 
@@ -186,6 +188,10 @@ local function warnProperty(class, key, message)
 	if Config.Debug then
 		print("[NexusUI] " .. class .. "." .. tostring(key) .. ": " .. tostring(message))
 	end
+end
+
+local function warnElement(kind, message)
+	print("[NexusUI] Add" .. kind .. " no se pudo crear: " .. tostring(message))
 end
 
 local function new(class, properties, parent)
@@ -512,11 +518,35 @@ local function normalizeOptions(nameOrOptions, extra)
 	return {}
 end
 
-local function installElementMethods(target, page)
+-- Si un executor rechaza algo de un elemento, no queremos cortar el script del
+-- usuario: devolvemos una API minima para que AddX siga y el resto de la tab exista.
+local installElementMethods
+
+local function stubApi(options)
+	local api = { _stub = true, _conns = {} }
+	local value = options and (options.Default ~= nil and options.Default or options.Text)
+	local text = options and options.Text or ""
+	function api:GetValue() return value end
+	function api:SetValue(newValue) value = newValue end
+	function api:GetText() return text end
+	function api:SetText(newText) text = tostring(newText or "") end
+	function api:Select() end
+	function api:Destroy() end
+	function api:AddConnection() end
+	return installElementMethods(api, nil)
+end
+
+installElementMethods = function(target, page)
 	for index = 1, #ElementKinds do
 		local kind = ElementKinds[index]
 		target["Add" .. kind] = function(_, a, b)
-			return Elements[kind](page, normalizeOptions(a, b))
+			local options = normalizeOptions(a, b)
+			local ok, result = pcall(Elements[kind], page, options)
+			if ok then
+				return result
+			end
+			warnElement(kind, result)
+			return stubApi(options)
 		end
 	end
 	return target
@@ -1246,7 +1276,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 	}, bar))
 
 	local titleLabel = label(bar, {
-		Size = UDim2.new(0.45, -20, 1, 0),
+		Size = UDim2.new(0.45, -20, 0, 18),
 		Position = UDim2.fromOffset(28, 0),
 		Text = tostring(options.Title or "NEXUS"),
 		Font = Config.MonoFont,
@@ -1264,30 +1294,23 @@ function lib:CreateWindow(nameOrOptions, extra)
 		BorderSizePixel = 0,
 	}, bar)
 	round(chip, 3)
-	tag("Accent", new("Frame", {
-		Size = UDim2.fromOffset(2, 12),
-		Position = UDim2.new(0, 5, 0.5, 0),
-		AnchorPoint = Vector2.new(0, 0.5),
-		BackgroundColor3 = Config.Accent,
-		BorderSizePixel = 0,
-	}, chip))
 	local chipLabel = label(chip, {
 		Size = UDim2.fromOffset(0, 0),
+		Position = UDim2.fromOffset(12, 0),
 		AutomaticSize = Enum.AutomaticSize.X,
 		Text = "",
 		TextColor3 = Config.Accent,
 		Font = Config.MonoFont,
 		TextSize = 11,
 	}, "Accent")
-	new("UIPadding", { PaddingLeft = UDim.new(0, 11), PaddingRight = UDim.new(0, 8) }, chip)
+	new("UIPadding", { PaddingRight = UDim.new(0, 8) }, chip)
 
 	label(bar, {
-		Size = UDim2.fromOffset(70, 16),
-		Position = UDim2.new(1, -112, 0.5, 0),
-		AnchorPoint = Vector2.new(1, 0.5),
+		Size = UDim2.new(0.45, -20, 0, 14),
+		Position = UDim2.fromOffset(28, 18),
 		Text = tostring(options.Subtitle or lib.Version),
 		TextColor3 = Config.Muted,
-		TextXAlignment = Enum.TextXAlignment.Right,
+		TextXAlignment = Enum.TextXAlignment.Left,
 		Font = Config.MonoFont,
 		TextSize = 10,
 	}, "Muted")
@@ -1460,33 +1483,29 @@ function lib:CreateWindow(nameOrOptions, extra)
 			TextColor3 = Config.Muted,
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextSize = 12,
+			TextWrapped = false,
+			TextTruncate = Enum.TextTruncate.AtEnd,
 			BackgroundTransparency = 1,
 		})
 		round(tabButton, 4)
 		hoverGhost(tabButton)
-		new("UIPadding", { PaddingLeft = UDim.new(0, 16) }, tabButton)
-		local indicator = tag("Accent", new("Frame", {
-			Size = UDim2.fromOffset(2, 16),
-			Position = UDim2.fromOffset(4, 7),
-			BackgroundColor3 = Config.Accent,
-			BackgroundTransparency = 1,
-			BorderSizePixel = 0,
-		}, tabButton))
-		round(indicator, 1)
-		return { Frame = tabButton, Indicator = indicator, Name = tostring(name) }
+		new("UIPadding", { PaddingLeft = UDim.new(0, 24), PaddingRight = UDim.new(0, 6) }, tabButton)
+		return { Frame = tabButton, Indicator = nil, Name = tostring(name) }
 	end
 
 	function window:SelectTab(tab)
 		self:CloseOverlays()
 		for index = 1, #self.tabs do
 			local entry = self.tabs[index]
-			local active = entry == tab
+			local active = entry.tab == tab
 			entry.page.scroller.Visible = active
 			tween(entry.button, {
 				TextColor3 = active and Config.Accent or Config.Muted,
 				BackgroundTransparency = active and 0.2 or 1,
 			}, Config.Anim)
-			tween(entry.indicator, { BackgroundTransparency = active and 0 or 1 }, Config.Anim)
+			if entry.indicator then
+				tween(entry.indicator, { BackgroundTransparency = active and 0 or 1 }, Config.Anim)
+			end
 		end
 		self.activeTab = tab
 		chipLabel.Text = tab and tab.Name or ""
@@ -1523,6 +1542,9 @@ function lib:CreateWindow(nameOrOptions, extra)
 
 		local tab = { _page = page, Name = tostring(name), Window = self }
 		tab.Button = self:AddTabButton(name)
+		self:AddConnection(tab.Button.Frame.Activated:Connect(function()
+			self:SelectTab(tab)
+		end))
 
 		function tab:Select()
 			self.Window:SelectTab(self)
@@ -1537,29 +1559,36 @@ function lib:CreateWindow(nameOrOptions, extra)
 		end
 
 		function tab:AddSection(sectionName)
-			local frame = makeRow(page, 26)
-			tag("Accent", new("Frame", {
-				Size = UDim2.fromOffset(14, 2),
-				Position = UDim2.fromOffset(0, 7),
-				BackgroundColor3 = Config.Accent,
-				BorderSizePixel = 0,
-			}, frame))
-			label(frame, {
-				Size = UDim2.new(1, -22, 0, 16),
-				Position = UDim2.fromOffset(20, 0),
-				Text = string.upper(tostring(sectionName or "Seccion")),
-				TextSize = 11,
-				Font = Config.MonoFont,
-				TextColor3 = Config.Muted,
-			}, "Muted")
-			new("Frame", {
-				Size = UDim2.new(1, 0, 0, 1),
-				Position = UDim2.fromOffset(0, 20),
-				BackgroundColor3 = Config.Stroke,
-				BackgroundTransparency = 0.55,
-				BorderSizePixel = 0,
-			}, frame)
-			return installElementMethods({ _page = page, Window = self }, page)
+			local ok, result = pcall(function()
+				local frame = makeRow(page, 26)
+				tag("Accent", new("Frame", {
+					Size = UDim2.fromOffset(14, 2),
+					Position = UDim2.fromOffset(0, 7),
+					BackgroundColor3 = Config.Accent,
+					BorderSizePixel = 0,
+				}, frame))
+				label(frame, {
+					Size = UDim2.new(1, -22, 0, 16),
+					Position = UDim2.fromOffset(20, 0),
+					Text = string.upper(tostring(sectionName or "Seccion")),
+					TextSize = 11,
+					Font = Config.MonoFont,
+					TextColor3 = Config.Muted,
+				}, "Muted")
+				new("Frame", {
+					Size = UDim2.new(1, 0, 0, 1),
+					Position = UDim2.fromOffset(0, 20),
+					BackgroundColor3 = Config.Stroke,
+					BackgroundTransparency = 0.55,
+					BorderSizePixel = 0,
+				}, frame)
+				return installElementMethods({ _page = page, Window = self }, page)
+			end)
+			if not ok then
+				warnElement("Section", result)
+				return installElementMethods({ _page = page, Window = self }, page)
+			end
+			return result
 		end
 
 		local entry = {
@@ -1831,6 +1860,8 @@ function lib:Theme(theme)
 			if object and object.Parent then
 				if object:IsA("UIGradient") then
 					object.Color = ColorSequence.new(color, Config.Accent2)
+				elseif object:IsA("UIStroke") then
+					object.Color = color
 				elseif role == "Text" or role == "Muted" then
 					object.TextColor3 = color
 				else
@@ -1888,5 +1919,7 @@ if type(getgenv) == "function" then
 		env.NexusUI = lib
 	end
 end
+
+print("[NexusUI] " .. lib.Build .. " cargado")
 
 return lib
