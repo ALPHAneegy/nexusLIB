@@ -25,6 +25,7 @@
 		win:SetKeybind(Enum.KeyCode.RightControl)
 		lib:Notify{ Title = "Listo", Text = "UI cargada", Type = "success" }
 		lib:Theme("Matrix")           -- Cyber / Matrix / Ember / Frost / Mono, o una tabla
+		lib.Config.Debug = true       -- imprime que propiedad no se pudo asignar (si la hay)
 		lib:Unload()                  -- limpia todo
 
 	TEMAS: Cyber (por defecto), Matrix, Ember, Frost, Mono
@@ -109,6 +110,8 @@ end
 local lib = {}
 lib.__index = lib
 lib.Version = "1.0.0"
+-- Huella: si el executor carga otra version, el numero no coincide con este.
+lib.Build = "nexus-1.0.0-b10-header-subtitle"
 
 --[[ CONFIG ]]--
 
@@ -132,6 +135,7 @@ local Config = {
 	Sidebar = 134,
 	Blur = false,
 	Scanline = true,
+	Debug = false,
 }
 
 local Themes = {
@@ -180,11 +184,28 @@ end
 
 --[[ UTILIDADES ]]--
 
+local function warnProperty(class, key, message)
+	if Config.Debug then
+		print("[NexusUI] " .. class .. "." .. tostring(key) .. ": " .. tostring(message))
+	end
+end
+
+local function warnElement(kind, message)
+	print("[NexusUI] Add" .. kind .. " no se pudo crear: " .. tostring(message))
+end
+
 local function new(class, properties, parent)
 	local object = Instance.new(class)
 	if properties then
 		for key, value in pairs(properties) do
-			object[key] = value
+			-- pcall: si una version de Roblox/executor no soporta la propiedad,
+			-- la libreria debe seguir viva en vez de abortar toda la UI
+			local ok, message = pcall(function()
+				object[key] = value
+			end)
+			if not ok then
+				warnProperty(class, key, message)
+			end
 		end
 	end
 	if parent then
@@ -253,7 +274,9 @@ local function beginDrag(onMove, onEnd)
 	moveConnection = UserInputService.InputChanged:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseMovement
 			or input.UserInputType == Enum.UserInputType.Touch then
-			onMove(input)
+			if onMove then
+				onMove(input)
+			end
 		end
 	end)
 	local endConnection
@@ -495,11 +518,35 @@ local function normalizeOptions(nameOrOptions, extra)
 	return {}
 end
 
-local function installElementMethods(target, page)
+-- Si un executor rechaza algo de un elemento, no queremos cortar el script del
+-- usuario: devolvemos una API minima para que AddX siga y el resto de la tab exista.
+local installElementMethods
+
+local function stubApi(options)
+	local api = { _stub = true, _conns = {} }
+	local value = options and (options.Default ~= nil and options.Default or options.Text)
+	local text = options and options.Text or ""
+	function api:GetValue() return value end
+	function api:SetValue(newValue) value = newValue end
+	function api:GetText() return text end
+	function api:SetText(newText) text = tostring(newText or "") end
+	function api:Select() end
+	function api:Destroy() end
+	function api:AddConnection() end
+	return installElementMethods(api, nil)
+end
+
+installElementMethods = function(target, page)
 	for index = 1, #ElementKinds do
 		local kind = ElementKinds[index]
 		target["Add" .. kind] = function(_, a, b)
-			return Elements[kind](page, normalizeOptions(a, b))
+			local options = normalizeOptions(a, b)
+			local ok, result = pcall(Elements[kind], page, options)
+			if ok then
+				return result
+			end
+			warnElement(kind, result)
+			return stubApi(options)
 		end
 	end
 	return target
@@ -1229,7 +1276,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 	}, bar))
 
 	local titleLabel = label(bar, {
-		Size = UDim2.new(0.45, -20, 1, 0),
+		Size = UDim2.new(0.45, -20, 0, 18),
 		Position = UDim2.fromOffset(28, 0),
 		Text = tostring(options.Title or "NEXUS"),
 		Font = Config.MonoFont,
@@ -1265,12 +1312,11 @@ function lib:CreateWindow(nameOrOptions, extra)
 	new("UIPadding", { PaddingLeft = UDim.new(0, 11), PaddingRight = UDim.new(0, 8) }, chip)
 
 	label(bar, {
-		Size = UDim2.fromOffset(70, 16),
-		Position = UDim2.new(1, -112, 0.5, 0),
-		AnchorPoint = Vector2.new(1, 0.5),
+		Size = UDim2.new(0.45, -20, 0, 14),
+		Position = UDim2.fromOffset(28, 18),
 		Text = tostring(options.Subtitle or lib.Version),
 		TextColor3 = Config.Muted,
-		TextXAlignment = Enum.TextXAlignment.Right,
+		TextXAlignment = Enum.TextXAlignment.Left,
 		Font = Config.MonoFont,
 		TextSize = 10,
 	}, "Muted")
@@ -1370,7 +1416,13 @@ function lib:CreateWindow(nameOrOptions, extra)
 		end
 		window.dragCancel = beginDrag(function(move)
 			local delta = (pointerPosition(move) - startPointer) / scaleValue
-			frame.Position = clampPosition(startPosition + delta)
+			-- UDim2 + Vector2 no existe en Roblox: hay que sumar offset a offset
+			frame.Position = clampPosition(UDim2.new(
+				startPosition.X.Scale,
+				startPosition.X.Offset + delta.X,
+				startPosition.Y.Scale,
+				startPosition.Y.Offset + delta.Y
+			))
 			window:Relayout()
 		end)
 	end)
@@ -1437,17 +1489,20 @@ function lib:CreateWindow(nameOrOptions, extra)
 			TextColor3 = Config.Muted,
 			TextXAlignment = Enum.TextXAlignment.Left,
 			TextSize = 12,
+			TextWrapped = false,
+			TextTruncate = Enum.TextTruncate.AtEnd,
 			BackgroundTransparency = 1,
 		})
 		round(tabButton, 4)
 		hoverGhost(tabButton)
-		new("UIPadding", { PaddingLeft = UDim.new(0, 16) }, tabButton)
+		new("UIPadding", { PaddingLeft = UDim.new(0, 24), PaddingRight = UDim.new(0, 6) }, tabButton)
 		local indicator = tag("Accent", new("Frame", {
-			Size = UDim2.fromOffset(2, 16),
-			Position = UDim2.fromOffset(4, 7),
+			Size = UDim2.fromOffset(2, 12),
+			Position = UDim2.fromOffset(7, 9),
 			BackgroundColor3 = Config.Accent,
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
+			ZIndex = tabButton.ZIndex + 1,
 		}, tabButton))
 		round(indicator, 1)
 		return { Frame = tabButton, Indicator = indicator, Name = tostring(name) }
@@ -1457,7 +1512,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 		self:CloseOverlays()
 		for index = 1, #self.tabs do
 			local entry = self.tabs[index]
-			local active = entry == tab
+			local active = entry.tab == tab
 			entry.page.scroller.Visible = active
 			tween(entry.button, {
 				TextColor3 = active and Config.Accent or Config.Muted,
@@ -1514,29 +1569,36 @@ function lib:CreateWindow(nameOrOptions, extra)
 		end
 
 		function tab:AddSection(sectionName)
-			local frame = makeRow(page, 26)
-			tag("Accent", new("Frame", {
-				Size = UDim2.fromOffset(14, 2),
-				Position = UDim2.fromOffset(0, 7),
-				BackgroundColor3 = Config.Accent,
-				BorderSizePixel = 0,
-			}, frame))
-			label(frame, {
-				Size = UDim2.new(1, -22, 0, 16),
-				Position = UDim2.fromOffset(20, 0),
-				Text = string.upper(tostring(sectionName or "Seccion")),
-				TextSize = 11,
-				Font = Config.MonoFont,
-				TextColor3 = Config.Muted,
-			}, "Muted")
-			new("Frame", {
-				Size = UDim2.new(1, 0, 0, 1),
-				Position = UDim2.fromOffset(0, 20),
-				BackgroundColor3 = Config.Stroke,
-				BackgroundTransparency = 0.55,
-				BorderSizePixel = 0,
-			}, frame)
-			return installElementMethods({ _page = page, Window = self }, page)
+			local ok, result = pcall(function()
+				local frame = makeRow(page, 26)
+				tag("Accent", new("Frame", {
+					Size = UDim2.fromOffset(14, 2),
+					Position = UDim2.fromOffset(0, 7),
+					BackgroundColor3 = Config.Accent,
+					BorderSizePixel = 0,
+				}, frame))
+				label(frame, {
+					Size = UDim2.new(1, -22, 0, 16),
+					Position = UDim2.fromOffset(20, 0),
+					Text = string.upper(tostring(sectionName or "Seccion")),
+					TextSize = 11,
+					Font = Config.MonoFont,
+					TextColor3 = Config.Muted,
+				}, "Muted")
+				new("Frame", {
+					Size = UDim2.new(1, 0, 0, 1),
+					Position = UDim2.fromOffset(0, 20),
+					BackgroundColor3 = Config.Stroke,
+					BackgroundTransparency = 0.55,
+					BorderSizePixel = 0,
+				}, frame)
+				return installElementMethods({ _page = page, Window = self }, page)
+			end)
+			if not ok then
+				warnElement("Section", result)
+				return installElementMethods({ _page = page, Window = self }, page)
+			end
+			return result
 		end
 
 		local entry = {
@@ -1808,6 +1870,8 @@ function lib:Theme(theme)
 			if object and object.Parent then
 				if object:IsA("UIGradient") then
 					object.Color = ColorSequence.new(color, Config.Accent2)
+				elseif object:IsA("UIStroke") then
+					object.Color = color
 				elseif role == "Text" or role == "Muted" then
 					object.TextColor3 = color
 				else
@@ -1865,5 +1929,7 @@ if type(getgenv) == "function" then
 		env.NexusUI = lib
 	end
 end
+
+print("[NexusUI] " .. lib.Build .. " cargado")
 
 return lib
