@@ -1,9 +1,14 @@
 --[[
 	NEXUS UI  •  v1.0.0
 	Libreria de interfaz futurista para Roblox. Un solo archivo, sin assets externos,
-	0 loops por frame (solo eventos + tweens), lista para usar con loadstring.
+	0 loops por frame (solo eventos + tweens).
 
-	CARGA (LocalScript):
+	ES COMPATIBLE CON LOCALScript Y CON EXECUTORS (Lua 5.1 / LuaJIT):
+	no usa +=, continue, //, goto, math.clamp, math.round, table.clear, table.clone
+	ni task.delay (si no existe task usa spawn/wait), y si no hay PlayerGui cae a CoreGui.
+	En executors la libreria queda en getgenv().NexusUI.
+
+	CARGA (LocalScript o executor):
 		local lib = loadstring(game:HttpGet("https://raw.githubusercontent.com/ALPHAneegy/nexusLIB/refs/heads/main/nexus.lua"))()
 		local win = lib:CreateWindow{ Title = "NEXUS", Subtitle = "v1.0.0" }
 		local tab = win:AddTab("Principal")
@@ -20,17 +25,19 @@
 		win:SetKeybind(Enum.KeyCode.RightControl)
 		lib:Notify{ Title = "Listo", Text = "UI cargada", Type = "success" }
 		lib:Theme("Matrix")           -- Cyber / Matrix / Ember / Frost / Mono, o una tabla
+		lib.Config.Debug = true       -- imprime que propiedad no se pudo asignar (si la hay)
 		lib:Unload()                  -- limpia todo
 
 	TEMAS: Cyber (por defecto), Matrix, Ember, Frost, Mono
 		ELEMENTOS: Button, Toggle, Slider, Input, Dropdown, Label, Progress, Keybind
 			Los elementos se anaden a la pestana o a una seccion, con o sin tabla de opciones:
 			sec:AddToggle("Aura", { Default = true })   ==   sec:AddToggle{ Name = "Aura", Default = true }
-	]]
+]]
 
-if not (game:GetService("Players").LocalPlayer) then
-	error("[NEXUS] Libreria solo de cliente: cargala desde un LocalScript.")
-end
+
+--[[ COMPATIBILIDAD (LocalScript y executors: Lua 5.1 / LuaJIT / Luau) ]]
+-- No usamos math.clamp, math.round, table.clear, table.clone, +=, continue ni //
+-- porque no existen (o no parsean) en el Lua de la mayoria de executors.
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -39,9 +46,72 @@ local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
 
+-- Utils 100% Lua 5.1
+local floor, min, max, abs = math.floor, math.min, math.max, math.abs
+
+local function clamp(value, low, high)
+	if value < low then
+		return low
+	elseif value > high then
+		return high
+	end
+	return value
+end
+
+local function roundValue(value)
+	return floor(value + 0.5)
+end
+
+local function clearTable(target)
+	for key in pairs(target) do
+		target[key] = nil
+	end
+end
+
+local function copyTable(source)
+	local result = {}
+	for key, value in pairs(source) do
+		result[key] = value
+	end
+	return result
+end
+
+-- Retrasos: task no existe en algunos executors
+local defer = nil
+if type(task) == "table" and type(task.delay) == "function" then
+	defer = task.delay
+else
+	defer = function(seconds, callback)
+		spawn(function()
+			wait(seconds)
+			callback()
+		end)
+	end
+end
+
+-- PlayerGui puede tardar en existir al inyectar; si no, usamos CoreGui
+local function resolvePlayerGui()
+	if not LocalPlayer then
+		return nil
+	end
+	local existing = LocalPlayer:FindFirstChild("PlayerGui")
+	if existing then
+		return existing
+	end
+	local ok, waited = pcall(function()
+		return LocalPlayer:WaitForChild("PlayerGui", 10)
+	end)
+	if ok and waited then
+		return waited
+	end
+	return nil
+end
+
 local lib = {}
 lib.__index = lib
 lib.Version = "1.0.0"
+-- Huella: si el executor carga otra version, el numero no coincide con este.
+lib.Build = "nexus-1.0.0-b8-tab-visible"
 
 --[[ CONFIG ]]--
 
@@ -65,6 +135,7 @@ local Config = {
 	Sidebar = 134,
 	Blur = false,
 	Scanline = true,
+	Debug = false,
 }
 
 local Themes = {
@@ -113,11 +184,28 @@ end
 
 --[[ UTILIDADES ]]--
 
+local function warnProperty(class, key, message)
+	if Config.Debug then
+		print("[NexusUI] " .. class .. "." .. tostring(key) .. ": " .. tostring(message))
+	end
+end
+
+local function warnElement(kind, message)
+	print("[NexusUI] Add" .. kind .. " no se pudo crear: " .. tostring(message))
+end
+
 local function new(class, properties, parent)
 	local object = Instance.new(class)
 	if properties then
 		for key, value in pairs(properties) do
-			object[key] = value
+			-- pcall: si una version de Roblox/executor no soporta la propiedad,
+			-- la libreria debe seguir viva en vez de abortar toda la UI
+			local ok, message = pcall(function()
+				object[key] = value
+			end)
+			if not ok then
+				warnProperty(class, key, message)
+			end
 		end
 	end
 	if parent then
@@ -186,7 +274,9 @@ local function beginDrag(onMove, onEnd)
 	moveConnection = UserInputService.InputChanged:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseMovement
 			or input.UserInputType == Enum.UserInputType.Touch then
-			onMove(input)
+			if onMove then
+				onMove(input)
+			end
 		end
 	end)
 	local endConnection
@@ -302,7 +392,11 @@ end
 
 --[[ RAIZ DE LA GUI ]]--
 
-local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+local playerGui = resolvePlayerGui()
+if not playerGui then
+	playerGui = game:GetService("CoreGui")
+end
+
 local previous = playerGui:FindFirstChild("NexusUI")
 if previous then
 	previous:Destroy()
@@ -342,7 +436,7 @@ end
 
 local function applyScale()
 	local size = viewport()
-	scaleValue = math.clamp(size.Y / 1000, 0.7, 1.15)
+	scaleValue = clamp(size.Y / 1000, 0.7, 1.15)
 	uiScale.Scale = scaleValue
 end
 
@@ -398,7 +492,7 @@ end
 local function normalizeOptions(nameOrOptions, extra)
 	if type(nameOrOptions) == "string" then
 		if type(extra) == "table" then
-			local options = table.clone(extra)
+			local options = copyTable(extra)
 			options.Name = nameOrOptions
 			return options
 		end
@@ -409,7 +503,7 @@ local function normalizeOptions(nameOrOptions, extra)
 	end
 	if type(nameOrOptions) == "table" then
 		if type(extra) == "function" then
-			local options = table.clone(nameOrOptions)
+			local options = copyTable(nameOrOptions)
 			options.Callback = options.Callback or extra
 			return options
 		end
@@ -424,11 +518,35 @@ local function normalizeOptions(nameOrOptions, extra)
 	return {}
 end
 
-local function installElementMethods(target, page)
+-- Si un executor rechaza algo de un elemento, no queremos cortar el script del
+-- usuario: devolvemos una API minima para que AddX siga y el resto de la tab exista.
+local installElementMethods
+
+local function stubApi(options)
+	local api = { _stub = true, _conns = {} }
+	local value = options and (options.Default ~= nil and options.Default or options.Text)
+	local text = options and options.Text or ""
+	function api:GetValue() return value end
+	function api:SetValue(newValue) value = newValue end
+	function api:GetText() return text end
+	function api:SetText(newText) text = tostring(newText or "") end
+	function api:Select() end
+	function api:Destroy() end
+	function api:AddConnection() end
+	return installElementMethods(api, nil)
+end
+
+installElementMethods = function(target, page)
 	for index = 1, #ElementKinds do
 		local kind = ElementKinds[index]
 		target["Add" .. kind] = function(_, a, b)
-			return Elements[kind](page, normalizeOptions(a, b))
+			local options = normalizeOptions(a, b)
+			local ok, result = pcall(Elements[kind], page, options)
+			if ok then
+				return result
+			end
+			warnElement(kind, result)
+			return stubApi(options)
 		end
 	end
 	return target
@@ -462,7 +580,7 @@ local function elementApi(frame, page)
 				item:Disconnect()
 			end
 		end
-		table.clear(self._conns)
+		clearTable(self._conns)
 		if self.Frame then
 			self.Frame:Destroy()
 		end
@@ -487,7 +605,7 @@ function Elements.Button(page, nameOrOptions, extra)
 	local api = elementApi(frame, page)
 	control.Activated:Connect(function()
 		tween(control, { BackgroundColor3 = lighten(Config.Card, 0.16) }, 0.06)
-		task.delay(0.09, function()
+		defer(0.09, function()
 			if control.Parent then
 				tween(control, { BackgroundColor3 = Config.Card }, Config.Anim)
 			end
@@ -629,7 +747,7 @@ function Elements.Slider(page, nameOrOptions, extra)
 	end
 
 	local function setValue(newValue, animate)
-		newValue = math.clamp(newValue, minimum, maximum)
+		newValue = clamp(newValue, minimum, maximum)
 		if step and step > 0 then
 			newValue = minimum + math.floor((newValue - minimum) / step + 0.5) * step
 		end
@@ -647,7 +765,7 @@ function Elements.Slider(page, nameOrOptions, extra)
 		if size == 0 then
 			return value
 		end
-		local ratio = math.clamp((position.X - origin) / size, 0, 1)
+		local ratio = clamp((position.X - origin) / size, 0, 1)
 		return minimum + ratio * (maximum - minimum)
 	end
 
@@ -837,7 +955,7 @@ function Elements.Dropdown(page, nameOrOptions, extra)
 		if (y + menuHeight) > (size.Y / scaleValue) - 8 then
 			y = math.max(8, anchor.Y - menuHeight - 4)
 		end
-		local x = math.clamp(anchor.X, 8, math.max(8, (size.X / scaleValue) - width - 8))
+		local x = clamp(anchor.X, 8, math.max(8, (size.X / scaleValue) - width - 8))
 		menu.Size = UDim2.fromOffset(width, menuHeight)
 		menu.Position = UDim2.fromOffset(x, y)
 	end
@@ -980,7 +1098,7 @@ end
 
 function Elements.Progress(page, nameOrOptions, extra)
 	local options = normalizeOptions(nameOrOptions, extra)
-	local value = math.clamp(options.Default or 0, 0, 100)
+	local value = clamp(options.Default or 0, 0, 100)
 
 	local frame = makeRow(page, 40)
 	local nameLabel, valueLabel = rowHeader(frame, options.Name or "Progreso", formatNumber(value) .. "%")
@@ -1003,7 +1121,7 @@ function Elements.Progress(page, nameOrOptions, extra)
 	local api = elementApi(frame, page)
 
 	function api:SetValue(newValue, seconds)
-		value = math.clamp(newValue, 0, 100)
+		value = clamp(newValue, 0, 100)
 		valueLabel.Text = formatNumber(value) .. "%"
 		tween(fill, { Size = UDim2.fromScale(value / 100, 1) }, seconds or 0.25)
 	end
@@ -1116,7 +1234,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 		local size = viewport()
 		local x = ((size.X / scaleValue) - width) / 2 + (offsetX or 0)
 		local y = ((size.Y / scaleValue) - height) / 2 + (offsetY or 0)
-		return UDim2.fromOffset(math.round(x), math.round(y))
+		return UDim2.fromOffset(roundValue(x), roundValue(y))
 	end
 
 	local frame = new("Frame", {
@@ -1269,7 +1387,8 @@ function lib:CreateWindow(nameOrOptions, extra)
 			BackgroundTransparency = 0.88,
 			BorderSizePixel = 0,
 		}, bar))
-		TweenService:Create(sweep, TweenInfo.new(2.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, 2.2, true), {
+		-- TweenInfo.new(time, estilo, direccion, repeatCount, reverses, delayTime)
+		TweenService:Create(sweep, TweenInfo.new(2.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true, 1.1), {
 			Position = UDim2.fromOffset(width + 46, 0),
 		}):Play()
 	end
@@ -1280,9 +1399,9 @@ function lib:CreateWindow(nameOrOptions, extra)
 		local maxY = (size.Y / scaleValue) - Config.BarHeight
 		return UDim2.new(
 			0,
-			math.clamp(position.X.Offset, -(width - 90), maxX),
+			clamp(position.X.Offset, -(width - 90), maxX),
 			0,
-			math.clamp(position.Y.Offset, 0, maxY)
+			clamp(position.Y.Offset, 0, maxY)
 		)
 	end
 
@@ -1298,7 +1417,13 @@ function lib:CreateWindow(nameOrOptions, extra)
 		end
 		window.dragCancel = beginDrag(function(move)
 			local delta = (pointerPosition(move) - startPointer) / scaleValue
-			frame.Position = clampPosition(startPosition + delta)
+			-- UDim2 + Vector2 no existe en Roblox: hay que sumar offset a offset
+			frame.Position = clampPosition(UDim2.new(
+				startPosition.X.Scale,
+				startPosition.X.Offset + delta.X,
+				startPosition.Y.Scale,
+				startPosition.Y.Offset + delta.Y
+			))
 			window:Relayout()
 		end)
 	end)
@@ -1385,7 +1510,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 		self:CloseOverlays()
 		for index = 1, #self.tabs do
 			local entry = self.tabs[index]
-			local active = entry == tab
+			local active = entry.tab == tab
 			entry.page.scroller.Visible = active
 			tween(entry.button, {
 				TextColor3 = active and Config.Accent or Config.Muted,
@@ -1442,29 +1567,36 @@ function lib:CreateWindow(nameOrOptions, extra)
 		end
 
 		function tab:AddSection(sectionName)
-			local frame = makeRow(page, 26)
-			tag("Accent", new("Frame", {
-				Size = UDim2.fromOffset(14, 2),
-				Position = UDim2.fromOffset(0, 7),
-				BackgroundColor3 = Config.Accent,
-				BorderSizePixel = 0,
-			}, frame))
-			label(frame, {
-				Size = UDim2.new(1, -22, 0, 16),
-				Position = UDim2.fromOffset(20, 0),
-				Text = string.upper(tostring(sectionName or "Seccion")),
-				TextSize = 11,
-				Font = Config.MonoFont,
-				TextColor3 = Config.Muted,
-			}, "Muted")
-			new("Frame", {
-				Size = UDim2.new(1, 0, 0, 1),
-				Position = UDim2.fromOffset(0, 20),
-				BackgroundColor3 = Config.Stroke,
-				BackgroundTransparency = 0.55,
-				BorderSizePixel = 0,
-			}, frame)
-			return installElementMethods({ _page = page, Window = self }, page)
+			local ok, result = pcall(function()
+				local frame = makeRow(page, 26)
+				tag("Accent", new("Frame", {
+					Size = UDim2.fromOffset(14, 2),
+					Position = UDim2.fromOffset(0, 7),
+					BackgroundColor3 = Config.Accent,
+					BorderSizePixel = 0,
+				}, frame))
+				label(frame, {
+					Size = UDim2.new(1, -22, 0, 16),
+					Position = UDim2.fromOffset(20, 0),
+					Text = string.upper(tostring(sectionName or "Seccion")),
+					TextSize = 11,
+					Font = Config.MonoFont,
+					TextColor3 = Config.Muted,
+				}, "Muted")
+				new("Frame", {
+					Size = UDim2.new(1, 0, 0, 1),
+					Position = UDim2.fromOffset(0, 20),
+					BackgroundColor3 = Config.Stroke,
+					BackgroundTransparency = 0.55,
+					BorderSizePixel = 0,
+				}, frame)
+				return installElementMethods({ _page = page, Window = self }, page)
+			end)
+			if not ok then
+				warnElement("Section", result)
+				return installElementMethods({ _page = page, Window = self }, page)
+			end
+			return result
 		end
 
 		local entry = {
@@ -1567,7 +1699,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 		for index = 1, #self._conns do
 			conns[index] = self._conns[index]
 		end
-		table.clear(self._conns)
+		clearTable(self._conns)
 		for index = 1, #conns do
 			local item = conns[index]
 			if type(item) == "function" then
@@ -1576,8 +1708,8 @@ function lib:CreateWindow(nameOrOptions, extra)
 				item:Disconnect()
 			end
 		end
-		table.clear(self._relayout)
-		table.clear(self._overlays)
+		clearTable(self._relayout)
+		clearTable(self._overlays)
 		for index = #Windows, 1, -1 do
 			if Windows[index] == self then
 				table.remove(Windows, index)
@@ -1585,7 +1717,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 		end
 		tween(intro, { Scale = 0.92 }, 0.12)
 		tween(frame, { BackgroundTransparency = 1 }, 0.12)
-		task.delay(0.14, function()
+		defer(0.14, function()
 			if frame.Parent then
 				frame:Destroy()
 			end
@@ -1695,7 +1827,7 @@ function lib:Notify(nameOrOptions, extra)
 		tween(target.Frame, {
 			Position = UDim2.new(1, 340, 1, target.Frame.Position.Y.Offset),
 		}, 0.18)
-		task.delay(0.2, function()
+		defer(0.2, function()
 			if target.Frame.Parent then
 				target.Frame:Destroy()
 			end
@@ -1709,7 +1841,7 @@ function lib:Notify(nameOrOptions, extra)
 		removeToast(toasts[1])
 	end
 
-	task.delay(options.Duration or 3, function()
+	defer(options.Duration or 3, function()
 		removeToast(entry)
 	end)
 	return { Close = function() removeToast(entry) end, Frame = toast }
@@ -1736,6 +1868,8 @@ function lib:Theme(theme)
 			if object and object.Parent then
 				if object:IsA("UIGradient") then
 					object.Color = ColorSequence.new(color, Config.Accent2)
+				elseif object:IsA("UIStroke") then
+					object.Color = color
 				elseif role == "Text" or role == "Muted" then
 					object.TextColor3 = color
 				else
@@ -1772,7 +1906,7 @@ function lib:Unload()
 	for index = #Windows, 1, -1 do
 		Windows[index]:Destroy()
 	end
-	table.clear(Windows)
+	clearTable(Windows)
 	if screen and screen.Parent then
 		screen:Destroy()
 	end
@@ -1785,5 +1919,15 @@ end
 function lib:GetAccent()
 	return Config.Accent
 end
+
+-- En executors deja la libreria accesible con getgenv().NexusUI
+if type(getgenv) == "function" then
+	local ok, env = pcall(getgenv)
+	if ok and type(env) == "table" then
+		env.NexusUI = lib
+	end
+end
+
+print("[NexusUI] " .. lib.Build .. " cargado")
 
 return lib
