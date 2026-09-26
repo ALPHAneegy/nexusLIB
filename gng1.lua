@@ -26,7 +26,7 @@
 		sec:AddProgress("Carga", { Default = 40 })
 		sec:AddKeybind("Bindeo")
 
-		win:SetKeybind(Enum.KeyCode.RightControl) -- ocultar/mostrar
+		win:SetKeybind(Enum.KeyCode.RightControl) -- reemplaza LShift predeterminado
 		lib:Notify{ Title = "Listo", Text = "UI cargada", Type = "success" }
 		lib:Theme("Matrix")           -- Cyber / Matrix / Ember / Frost / Mono, o una tabla
 		lib.Config.Debug = true       -- imprime que propiedad no se pudo asignar (si la hay)
@@ -115,7 +115,7 @@ local lib = {}
 lib.__index = lib
 lib.Version = "1.0.0"
 -- Huella: si el executor carga otra version, el numero no coincide con este.
-lib.Build = "luna-1.0.0-b15-centered-chip-text"
+lib.Build = "luna-1.0.0-b21-rightshift-restore"
 
 --[[ CONFIG ]]--
 
@@ -344,12 +344,16 @@ local function accentFill(object, rotation)
 end
 
 local function card(parent, size, position, class)
-	local object = new(class or "Frame", {
+	local properties = {
 		Size = size or UDim2.fromScale(1, 1),
 		Position = position,
 		BackgroundColor3 = Config.Card,
 		BorderSizePixel = 0,
-	}, parent)
+	}
+	if class == "TextButton" then
+		properties.Text = ""
+	end
+	local object = new(class or "Frame", properties, parent)
 	round(object)
 	return tag("Card", object)
 end
@@ -1236,6 +1240,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 	local width = options.Width or 520
 	local height = options.Height or 620
 	local cascade = #Windows * 26
+	local restoreButton
 
 	local function centerPosition(offsetX, offsetY)
 		local size = viewport()
@@ -1255,6 +1260,25 @@ function lib:CreateWindow(nameOrOptions, extra)
 		ClipsDescendants = true,
 	}, root)
 	tag("Panel", frame)
+	local screenSize = viewport()
+	restoreButton = button(root, {
+		Name = "LunaRestoreButton",
+		Size = UDim2.fromOffset(56, 30),
+		Position = UDim2.fromOffset(
+			max(8, screenSize.X / scaleValue - 68),
+			max(8, screenSize.Y / scaleValue - 46)
+		),
+		Text = "LUNA",
+		TextSize = 11,
+		TextColor3 = Config.Accent,
+		BackgroundTransparency = 0.08,
+		Visible = false,
+		Active = true,
+		ZIndex = 100,
+	})
+	round(restoreButton, 5)
+	outline(restoreButton, Config.Accent, 1, 0.2)
+	window.RestoreButton = restoreButton
 	round(frame, Config.Radius + 2)
 	new("UIStroke", {
 		Color = Color3.new(0, 0, 0),
@@ -1625,11 +1649,13 @@ function lib:CreateWindow(nameOrOptions, extra)
 		if not isVisible then
 			self:CloseOverlays()
 		end
-		frame.Visible = isVisible and true or false
+		local visible = isVisible and true or false
+		frame.Visible = visible
+		restoreButton.Visible = not visible
 	end
 
 	function window:Toggle()
-		frame.Visible = not frame.Visible
+		self:SetVisible(not frame.Visible)
 		return frame.Visible
 	end
 
@@ -1654,7 +1680,7 @@ function lib:CreateWindow(nameOrOptions, extra)
 			if processed or input.KeyCode ~= key or UserInputService:GetFocusedTextBox() then
 				return
 			end
-			frame.Visible = not frame.Visible
+			self:SetVisible(not frame.Visible)
 		end)
 		self:AddConnection(function()
 			if self.keyConnection then
@@ -1662,6 +1688,54 @@ function lib:CreateWindow(nameOrOptions, extra)
 			end
 		end)
 	end
+
+	local restoreDragCancel
+	local restoreWasDragged = false
+	window:AddConnection(restoreButton.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		restoreWasDragged = false
+		if restoreDragCancel then
+			restoreDragCancel()
+			restoreDragCancel = nil
+		end
+		local startPointer = pointerPosition(input)
+		local startPosition = restoreButton.Position
+		restoreDragCancel = beginDrag(function(move)
+			local delta = (pointerPosition(move) - startPointer) / scaleValue
+			if abs(delta.X) > 4 or abs(delta.Y) > 4 then
+				restoreWasDragged = true
+			end
+			local size = viewport()
+			local maxX = max(0, size.X / scaleValue - 56)
+			local maxY = max(0, size.Y / scaleValue - 30)
+			restoreButton.Position = UDim2.fromOffset(
+				clamp(startPosition.X.Offset + delta.X, 0, maxX),
+				clamp(startPosition.Y.Offset + delta.Y, 0, maxY)
+			)
+		end, function()
+			restoreDragCancel = nil
+		end)
+	end))
+	window:AddConnection(restoreButton.Activated:Connect(function()
+		if restoreWasDragged then
+			restoreWasDragged = false
+			return
+		end
+		window:SetVisible(true)
+	end))
+	window:AddConnection(function()
+		if restoreDragCancel then
+			restoreDragCancel()
+			restoreDragCancel = nil
+		end
+		restoreButton:Destroy()
+	end)
+
+	-- RightShift oculta/muestra la ventana por defecto; se puede sustituir con SetKeybind.
+	window:SetKeybind(options.Keybind == nil and Enum.KeyCode.RightShift or options.Keybind)
 
 	function window:Minimize(isMinimized)
 		self.minimized = isMinimized == nil and (not self.minimized) or (isMinimized and true or false)
@@ -1873,7 +1947,7 @@ function lib:Theme(theme)
 					object.Color = ColorSequence.new(color, Config.Accent2)
 				elseif object:IsA("UIStroke") then
 					object.Color = color
-				elseif role == "Text" or role == "Muted" then
+				elseif object:IsA("TextLabel") or role == "Text" or role == "Muted" then
 					object.TextColor3 = color
 				else
 					object.BackgroundColor3 = color
@@ -1883,6 +1957,14 @@ function lib:Theme(theme)
 	end
 	for index = 1, #Windows do
 		local window = Windows[index]
+		for tabIndex = 1, #window.tabs do
+			local entry = window.tabs[tabIndex]
+			local active = window.activeTab == entry.tab
+			-- Reemplaza cualquier tween de seleccion anterior que aun use el color viejo.
+			tween(entry.button, {
+				TextColor3 = active and Config.Accent or Config.Muted,
+			}, Config.Anim)
+		end
 		for position = 1, #window.scrollbars do
 			window.scrollbars[position].ScrollBarImageColor3 = Config.Accent
 		end
